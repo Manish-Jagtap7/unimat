@@ -1,0 +1,41 @@
+# Python / Fast API
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+env/
+.env
+.pytest_cache/
+htmlcov/
+.coverage
+
+# Node.js / Next.js
+node_modules/
+.next/
+out/
+build/
+dist/
+.npm
+npm-debug.log*
+
+# Databases and Data Files
+*.db
+*.sqlite
+*.sqlite3
+chroma_db/
+*.xlsx
+*.csv
+*.xls
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+
+#other
+
+problem_statement.md 
