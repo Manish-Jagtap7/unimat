@@ -54,9 +54,9 @@ async def lifespan(app: FastAPI):
     os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
     logger.info(f"📁 Upload directory: {os.path.abspath(settings.UPLOAD_DIR)}")
 
-    # Ensure ChromaDB directory exists
-    os.makedirs(settings.CHROMA_PERSIST_DIR, exist_ok=True)
-    logger.info(f"🧠 ChromaDB persist dir: {os.path.abspath(settings.CHROMA_PERSIST_DIR)}")
+    # Ensure Qdrant directory exists
+    os.makedirs(settings.QDRANT_PATH, exist_ok=True)
+    logger.info(f"🧠 Qdrant DB path: {os.path.abspath(settings.QDRANT_PATH)}")
 
     logger.info(f"🔑 Gemini API Key: {'configured' if settings.GEMINI_API_KEY else 'NOT SET'}")
     logger.info(f"📊 Embedding model: {settings.EMBEDDING_MODEL}")

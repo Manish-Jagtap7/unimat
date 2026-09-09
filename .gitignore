@@ -23,6 +23,8 @@ npm-debug.log*
 *.sqlite
 *.sqlite3
 chroma_db/
+chroma_data/
+qdrant_data/
 *.xlsx
 *.csv
 *.xls

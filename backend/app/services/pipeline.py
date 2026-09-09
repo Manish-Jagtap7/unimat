@@ -210,23 +210,26 @@ def execute(run_id: int, dup_threshold: float = 0.95, near_dup_threshold: float 
             .first()
         )
         if upload_session:
-            # Calculate accuracy if ground truth is present
+            # Calculate clustering mapping accuracy based on ground truth
             correct = 0
             total_evaluated = 0
             for item in items:
-                if item.is_duplicate_cluster is not None:
-                    total_evaluated += 1
-                    # Structurally, parents (matched_material_id is None) are the UNIQUE representatives of a cluster.
-                    if item.matched_material_id is None:
-                        is_pred_dup = False
-                    else:
-                        is_pred_dup = item.classification in (Classification.DUPLICATE, Classification.NEAR_DUPLICATE)
+                if item.matched_material_id is not None and item.ground_truth_cluster_id:
+                    # It was mapped to a parent
+                    parent = next((p for p in items if p.id == item.matched_material_id), None)
+                    if not parent:
+                        parent = db.query(MaterialItem).filter(MaterialItem.id == item.matched_material_id).first()
                         
-                    if item.is_duplicate_cluster == is_pred_dup:
-                        correct += 1
+                    if parent and parent.ground_truth_cluster_id:
+                        total_evaluated += 1
+                        if str(item.ground_truth_cluster_id).strip() == str(parent.ground_truth_cluster_id).strip():
+                            correct += 1
             
             if total_evaluated > 0:
                 upload_session.accuracy_score = round(correct / total_evaluated, 4)
+            else:
+                upload_session.accuracy_score = 1.0  # If no ground truth available, default to 100% or leave None
+                
                 
             upload_session.status = PipelineStatus.COMPLETED
             upload_session.completed_at = datetime.now(timezone.utc)

@@ -30,19 +30,21 @@ class Settings(BaseSettings):
     # ─── Gemini API ─────────────────────────────────────────────────────────────
     GEMINI_API_KEY: str = ""
 
-    # ─── ChromaDB ───────────────────────────────────────────────────────────────
-    CHROMA_PERSIST_DIR: str = "./chroma_data"
+    # ─── Qdrant Vector DB ──────────────────────────────────────────────────────
+    QDRANT_PATH: str = "./qdrant_data"
 
-    # ─── Embedding Model ───────────────────────────────────────────────────────
+    # ─── Embedding Models ──────────────────────────────────────────────────────
     EMBEDDING_MODEL: str = "BAAI/bge-base-en-v1.5"
+    SPARSE_MODEL: str = "Qdrant/bm25"
 
     # ─── Server ─────────────────────────────────────────────────────────────────
     HOST: str = "0.0.0.0"
     PORT: int = 8000
 
     # ─── Classification Thresholds ──────────────────────────────────────────────
-    DUPLICATE_THRESHOLD: float = 0.95
-    NEAR_DUPLICATE_THRESHOLD: float = 0.85
+    # Tuned for BGE-base Dense Cosine Similarity + Reranker Penalty Filtering
+    DUPLICATE_THRESHOLD: float = 0.85
+    NEAR_DUPLICATE_THRESHOLD: float = 0.70
 
     # ─── LLM Batching ──────────────────────────────────────────────────────────
     LLM_BATCH_SIZE: int = 15
