@@ -1,7 +1,6 @@
 """
-UniMat AI — Vector Service (Qdrant Hybrid Search)
-
 UniMat AI — Vector Service
+
 Handles inserting and querying material items in Qdrant using BGE-base dense embeddings.
 """
 
@@ -108,9 +107,7 @@ def query_nearest(
     exclude_id: str = None,
 ) -> List[Tuple[str, float, dict]]:
     """
-    Find the nearest neighbors using hybrid search (dense + sparse).
-    
-    Uses RRF for RANKING, then uses a Cross-Encoder Reranker to calculate an absolute 0-1 similarity score.
+    Find the nearest neighbors using dense cosine similarity.
     """
     _ensure_collection()
     client = _get_client()
@@ -121,74 +118,30 @@ def query_nearest(
 
     # Encode query
     query_dense = _encode_dense([query_text])[0]
-    sparse_vec_list = _encode_sparse([query_text])
-    sparse_vec = sparse_vec_list[0]
 
     fetch_n = min(n_results + (1 if exclude_id else 0), count)
 
-    # Step 1: Use RRF to RANK candidates (hybrid dense + sparse)
     results = client.query_points(
         collection_name=COLLECTION_NAME,
-        prefetch=[
-            models.Prefetch(
-                query=query_dense.tolist(),
-                using="dense",
-                limit=fetch_n + 5,
-            ),
-            models.Prefetch(
-                query=models.SparseVector(
-                    indices=sparse_vec.indices.tolist(),
-                    values=sparse_vec.values.tolist(),
-                ),
-                using="sparse",
-                limit=fetch_n + 5,
-            ),
-        ],
-        query=models.FusionQuery(fusion=models.Fusion.RRF),
+        query=query_dense.tolist(),
+        using="dense",
         limit=fetch_n,
         with_payload=True,
     )
 
-    candidate_docs = []
-    candidate_points = []
-    
+    matches = []
     for point in results.points:
         chroma_id = point.payload.get("chroma_id", str(point.id))
         if exclude_id and chroma_id == exclude_id:
             continue
             
-        candidate_docs.append(point.payload.get("document", ""))
-        candidate_points.append(point)
+        similarity = float(point.score)
+        metadata = {k: v for k, v in point.payload.items() if k not in ("document", "chroma_id")}
+        matches.append((chroma_id, similarity, metadata))
         
-        if len(candidate_points) >= n_results:
+        if len(matches) >= n_results:
             break
 
-    matches = []
-    if candidate_points:
-        # Step 2: Rerank to find false positives
-        logits = _rerank_scores(query_text, candidate_docs)
-        
-        for idx, point in enumerate(candidate_points):
-            chroma_id = point.payload.get("chroma_id", str(point.id))
-            
-            # Compute actual dense cosine similarity
-            match_dense = np.array(point.vector["dense"])
-            dense_score = _cosine_similarity(query_dense, match_dense)
-            
-            logit = float(logits[idx])
-            
-            # Penalize dense score if reranker strongly disagrees
-            if logit < -2.0:
-                final_score = dense_score * 0.4
-            elif logit < 0.0:
-                final_score = dense_score * 0.7
-            else:
-                final_score = dense_score
-                
-            metadata = {k: v for k, v in point.payload.items() if k not in ("document", "chroma_id")}
-            matches.append((chroma_id, final_score, metadata))
-
-    # Sort matches descending
     matches.sort(key=lambda x: x[1], reverse=True)
     return matches
 
@@ -255,11 +208,37 @@ def get_index_count() -> int:
 
 def reset_collection():
     """Delete and recreate the collection. Use for testing/reset."""
-    client = _get_client()
-    try:
-        if client.collection_exists(COLLECTION_NAME):
-            client.delete_collection(collection_name=COLLECTION_NAME)
-            logger.warning(f"Deleted Qdrant collection '{COLLECTION_NAME}'")
-    except Exception:
-        pass
-    _ensure_collection()
+    global _qdrant_client
+    
+    # Step 1: Close existing client to release file locks
+    if _qdrant_client is not None:
+        try:
+            _qdrant_client.close()
+        except Exception as e:
+            logger.warning(f"Error closing Qdrant client: {e}")
+        _qdrant_client = None
+    
+    # Step 2: Physically delete the qdrant_data directory to guarantee no ghost vectors
+    import shutil
+    import os
+    qdrant_path = os.path.abspath(settings.QDRANT_PATH)
+    if os.path.exists(qdrant_path):
+        try:
+            shutil.rmtree(qdrant_path)
+            logger.info(f"Physically deleted Qdrant data directory: {qdrant_path}")
+        except Exception as e:
+            logger.error(f"Failed to delete Qdrant data directory: {e}")
+    
+    # Step 3: Reinitialize fresh client and empty collection
+    _qdrant_client = QdrantClient(path=settings.QDRANT_PATH)
+    _qdrant_client.create_collection(
+        collection_name=COLLECTION_NAME,
+        vectors_config={
+            "dense": models.VectorParams(
+                size=DENSE_VECTOR_SIZE,
+                distance=models.Distance.COSINE,
+            ),
+        },
+    )
+    count = _qdrant_client.count(collection_name=COLLECTION_NAME).count
+    logger.info(f"Qdrant reset complete. Collection '{COLLECTION_NAME}' recreated with {count} items.")

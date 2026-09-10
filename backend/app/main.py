@@ -108,25 +108,20 @@ admin_router = APIRouter(prefix="/api/admin", tags=["Admin"])
 
 @admin_router.post("/reset-db")
 def reset_database(db: Session = Depends(get_db)):
-    """Reset the entire PostgreSQL database for a fresh prototype demo."""
-    # First, truncate all tables (cascade to handle foreign keys)
+    """Reset the entire database (PostgreSQL + Qdrant) for a fresh prototype demo."""
+    # First, truncate all PostgreSQL tables (cascade to handle foreign keys)
     db.execute(text("TRUNCATE TABLE pipeline_runs, audit_trail, legacy_mappings, material_items, national_codes, upload_sessions, cpse_profiles CASCADE;"))
     db.commit()
     
-    # Reset ChromaDB collections
+    # Reset Qdrant vector collection — delete and recreate
     try:
         from app.services import vector_service
-        # Must fetch the client from vector_service to get the configured client
-        client = vector_service._get_client()
-        try:
-            client.delete_collection("material_master")
-        except Exception:
-            pass
-        vector_service._collection = None
+        vector_service.reset_collection()
+        logger.info("Qdrant collection reset successfully")
     except Exception as e:
-        logger.error(f"Failed to reset ChromaDB: {e}")
+        logger.error(f"Failed to reset Qdrant: {e}")
 
-    return {"message": "Database successfully wiped."}
+    return {"message": "Database successfully wiped (PostgreSQL + Qdrant)."}
 
 app.include_router(admin_router)
 
