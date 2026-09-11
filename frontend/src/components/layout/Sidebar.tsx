@@ -14,7 +14,6 @@ import { api } from "@/lib/api";
 
 const navItems = [
   { name: "Dashboard", href: "/", icon: LayoutDashboard },
-  { name: "Upload Data", href: "/upload", icon: UploadCloud },
   { name: "Materials Master", href: "/materials", icon: Database },
   { name: "Review Center", href: "/review", icon: CheckSquare },
 ];

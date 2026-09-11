@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { motion } from "framer-motion";
+import { motion, AnimatePresence } from "framer-motion";
 import { api } from "@/lib/api";
 import { 
   Database, 
@@ -14,7 +14,10 @@ import {
   FileText,
   Layers,
   RefreshCw,
-  Zap
+  Zap,
+  Upload,
+  File,
+  X
 } from "lucide-react";
 import Link from "next/link";
 
@@ -29,12 +32,18 @@ const containerVariants = {
 
 const itemVariants = {
   hidden: { y: 20, opacity: 0 },
-  show: { y: 0, opacity: 1, transition: { type: "spring", stiffness: 100 } }
+  show: { y: 0, opacity: 1, transition: { type: "spring" as const, stiffness: 100 } }
 };
 
 export default function DashboardPage() {
   const [stats, setStats] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+
+  // Upload state
+  const [dragActive, setDragActive] = useState(false);
+  const [files, setFiles] = useState<File[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [progress, setProgress] = useState<{ step: string; pct: number } | null>(null);
 
   const fetchStats = async () => {
     setLoading(true);
@@ -43,13 +52,13 @@ export default function DashboardPage() {
       setStats(response.data.stats);
     } catch (error) {
       console.error("Failed to fetch dashboard stats", error);
-      // Fallback for demonstration if backend fails
       setStats({
-        total_materials: 2548,
-        total_cnmc_codes: 842,
-        duplicate_reduction_pct: 62.4,
-        pending_reviews: 14,
-        total_duplicates: 1540
+        total_materials: 0,
+        total_cnmc_codes: 0,
+        duplicate_reduction_pct: 0,
+        pending_reviews: 0,
+        total_duplicates: 0,
+        average_accuracy: null,
       });
     } finally {
       setLoading(false);
@@ -59,6 +68,142 @@ export default function DashboardPage() {
   useEffect(() => {
     fetchStats();
   }, []);
+
+  // Upload handlers
+  const handleDrag = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.type === "dragenter" || e.type === "dragover") {
+      setDragActive(true);
+    } else if (e.type === "dragleave") {
+      setDragActive(false);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragActive(false);
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      handleFiles(Array.from(e.dataTransfer.files));
+    }
+  };
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    e.preventDefault();
+    if (e.target.files && e.target.files[0]) {
+      handleFiles(Array.from(e.target.files));
+    }
+  };
+
+  const handleFiles = (newFiles: File[]) => {
+    const validFiles = newFiles.filter(
+      (file) => file.type === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" || file.type === "text/csv" || file.name.endsWith(".xlsx") || file.name.endsWith(".xls")
+    );
+    setFiles((prev) => [...prev, ...validFiles]);
+  };
+
+  const removeFile = (index: number) => {
+    setFiles((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  // Pipeline step labels for display
+  const PIPELINE_STEPS = [
+    "UPLOADING FILES",
+    "PARSING EXCEL DATA",
+    "NLP STANDARDIZATION", 
+    "TOKENIZING DESCRIPTIONS",
+    "EXPANDING ABBREVIATIONS",
+    "GENERATING EMBEDDINGS",
+    "INDEXING IN VECTOR DB",
+    "COMPUTING SIMILARITY",
+    "CLASSIFYING ITEMS",
+    "GROUPING DUPLICATES",
+    "EVALUATING ACCURACY",
+    "FINALIZING RESULTS",
+  ];
+
+  const handleUpload = async () => {
+    if (files.length === 0) return;
+    setUploading(true);
+
+    // ── Smooth client-side progress bar ──────────────────────────────
+    // Runs from 0→95% on a fast timer, then snaps to 100% on completion.
+    let pct = 0;
+    let stepIdx = 0;
+    let done = false;
+
+    setProgress({ step: PIPELINE_STEPS[0], pct: 0 });
+
+    const ticker = setInterval(() => {
+      if (done) return;
+
+      // Accelerate fast at the start, slow down approaching 95%
+      const remaining = 95 - pct;
+      const increment = Math.max(0.3, remaining * 0.06);
+      pct = Math.min(95, pct + increment);
+
+      // Cycle through step labels based on percentage
+      const newStepIdx = Math.min(
+        PIPELINE_STEPS.length - 1,
+        Math.floor((pct / 95) * PIPELINE_STEPS.length)
+      );
+      if (newStepIdx !== stepIdx) {
+        stepIdx = newStepIdx;
+      }
+
+      setProgress({ step: PIPELINE_STEPS[stepIdx], pct: Math.round(pct) });
+    }, 80); // tick every 80ms for silky smooth movement
+
+    try {
+      // ── Upload files ─────────────────────────────────────────────────
+      const formData = new FormData();
+      files.forEach((file) => {
+        formData.append("files", file);
+      });
+
+      const response = await api.post('/api/upload', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      
+      const sessionIds = response.data.sessions.map((s: any) => s.id);
+
+      // ── Trigger pipeline (this returns immediately, pipeline runs in BG) ──
+      await api.post('/api/pipeline/run', { session_ids: sessionIds });
+
+      setFiles([]);
+
+      // ── Poll for real completion ─────────────────────────────────────
+      const completionCheck = setInterval(async () => {
+        try {
+          const res = await api.get('/api/pipeline/status');
+          const run = res.data;
+          if (run && (run.status === "COMPLETED" || run.status === "FAILED")) {
+            clearInterval(completionCheck);
+            done = true;
+            clearInterval(ticker);
+
+            if (run.status === "COMPLETED") {
+              setProgress({ step: "✅ COMPLETE", pct: 100 });
+              setTimeout(() => { setProgress(null); setUploading(false); fetchStats(); }, 2000);
+            } else {
+              setProgress({ step: "❌ PIPELINE FAILED", pct: 0 });
+              setTimeout(() => { setProgress(null); setUploading(false); }, 3000);
+            }
+          }
+        } catch {
+          // Pipeline hasn't started yet or 404, keep waiting
+        }
+      }, 500);
+
+    } catch (error) {
+      clearInterval(ticker);
+      console.error("Upload failed", error);
+      alert("Failed to upload catalogs. Please check the backend logs.");
+      setUploading(false);
+      setProgress(null);
+    }
+  };
 
   return (
     <div className="min-h-screen p-8 bg-slate-50/50">
@@ -71,10 +216,6 @@ export default function DashboardPage() {
             <p className="text-slate-500 mt-1 font-medium">Real-time metrics for national material standardization.</p>
           </motion.div>
           <motion.div initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} className="flex gap-3">
-            <Link href="/upload" className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-4 py-2.5 rounded-xl font-semibold shadow-sm transition-all flex items-center gap-2">
-              <FileText className="w-4 h-4" />
-              Upload Catalog
-            </Link>
             <button 
               onClick={fetchStats}
               className="flex items-center px-4 py-2.5 bg-indigo-600 border border-transparent rounded-xl text-sm font-bold text-white hover:bg-indigo-700 transition-all shadow-sm shadow-indigo-200"
@@ -85,7 +226,7 @@ export default function DashboardPage() {
           </motion.div>
         </div>
 
-        {/* Stats Grid */}
+        {/* Stats Grid — 4 stat cards */}
         <motion.div 
           variants={containerVariants}
           initial="hidden"
@@ -132,7 +273,7 @@ export default function DashboardPage() {
                   style={{ width: `${stats?.duplicate_reduction_pct || 0}%` }}
                 ></div>
               </div>
-              <span className="text-slate-500 font-medium">
+              <span className="text-slate-500 font-medium whitespace-nowrap">
                 {stats?.duplicate_reduction_pct?.toFixed(1) || 0}% Deduplicated
               </span>
             </div>
@@ -177,35 +318,94 @@ export default function DashboardPage() {
           </motion.div>
         </motion.div>
 
-        {/* Charts & Activity Section */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-8">
-          {/* Main Chart Area */}
-          <motion.div 
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={{ delay: 0.3 }}
-            className="lg:col-span-2 bg-white rounded-2xl shadow-sm border border-slate-100 p-6"
-          >
-            <div className="flex justify-between items-center mb-6">
-              <h2 className="text-lg font-bold text-slate-800 flex items-center">
-                <BarChart3 className="w-5 h-5 mr-2 text-indigo-500" />
-                Standardization Progress
-              </h2>
-              <select className="bg-slate-50 border border-slate-200 text-sm rounded-lg px-3 py-1.5 outline-none focus:ring-2 focus:ring-indigo-500 font-medium text-slate-600">
-                <option>Last 30 Days</option>
-                <option>Last 7 Days</option>
-                <option>All Time</option>
-              </select>
+        {/* Upload Section — replaces the old "Standardization Progress" chart */}
+        <motion.div
+          initial={{ opacity: 0, scale: 0.95 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ delay: 0.3 }}
+          className="bg-white rounded-2xl shadow-sm border border-slate-100 p-8"
+        >
+          <div className="flex justify-between items-center mb-6">
+            <h2 className="text-lg font-bold text-slate-800 flex items-center">
+              <Upload className="w-5 h-5 mr-2 text-indigo-500" />
+              Upload CPSE Catalog
+            </h2>
+            <p className="text-sm text-slate-400 font-medium">CPSE auto-detected from file contents</p>
+          </div>
+
+          {progress ? (
+            <div className="flex flex-col items-center justify-center py-12">
+              <p className="text-lg font-bold text-slate-700 mb-4">{progress.step}</p>
+              <div className="w-full max-w-lg bg-slate-100 rounded-full h-4">
+                <div 
+                  className="bg-gradient-to-r from-indigo-500 to-indigo-600 h-4 rounded-full transition-all duration-500 relative overflow-hidden"
+                  style={{ width: `${progress.pct}%` }}
+                >
+                  <div className="absolute inset-0 bg-white/20 animate-pulse"></div>
+                </div>
+              </div>
+              <p className="text-sm text-slate-500 mt-3 font-semibold">{Math.round(progress.pct)}% Complete</p>
             </div>
-            
-            <div className="h-64 flex items-center justify-center border-2 border-dashed border-slate-100 rounded-xl bg-slate-50/50">
-              <div className="text-center">
-                <BarChart3 className="w-12 h-12 text-slate-300 mx-auto mb-3" />
-                <p className="text-slate-400 font-medium">Chart Visualization Area</p>
+          ) : (
+            <div className="flex flex-col lg:flex-row gap-6">
+              {/* Drag & Drop Zone */}
+              <div 
+                className={`flex-1 border-2 border-dashed rounded-2xl p-10 text-center transition-all cursor-pointer flex flex-col items-center justify-center ${
+                  dragActive ? "border-indigo-500 bg-indigo-50/50" : "border-slate-200 bg-slate-50/50 hover:bg-slate-100/50 hover:border-slate-300"
+                }`}
+                onDragEnter={handleDrag}
+                onDragLeave={handleDrag}
+                onDragOver={handleDrag}
+                onDrop={handleDrop}
+                onClick={() => document.getElementById("file-upload")?.click()}
+              >
+                <div className="p-4 bg-indigo-50 rounded-2xl mb-4">
+                  <Upload className="w-8 h-8 text-indigo-500" />
+                </div>
+                <p className="text-base font-bold text-slate-700">Drag & Drop Files Here</p>
+                <p className="text-sm text-slate-400 mt-1">or click to browse · .xlsx, .xls, .csv</p>
+                <input id="file-upload" type="file" multiple accept=".xlsx,.xls,.csv" className="hidden" onChange={handleChange} />
+              </div>
+
+              {/* File List & Upload Button */}
+              <div className="flex-1 flex flex-col justify-between">
+                {files.length > 0 ? (
+                  <div className="space-y-2 max-h-48 overflow-y-auto">
+                    {files.map((file, i) => (
+                      <div key={i} className="flex items-center justify-between bg-slate-50 p-3 rounded-xl border border-slate-200">
+                        <div className="flex items-center">
+                          <FileText className="w-5 h-5 text-indigo-400 mr-3 flex-shrink-0" />
+                          <span className="text-sm font-semibold text-slate-700 truncate">{file.name}</span>
+                        </div>
+                        <button onClick={(e) => { e.stopPropagation(); removeFile(i); }} className="text-slate-400 hover:text-red-500 ml-3 flex-shrink-0">
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="flex-1 flex items-center justify-center text-center py-6">
+                    <div>
+                      <FileText className="w-10 h-10 text-slate-200 mx-auto mb-2" />
+                      <p className="text-sm text-slate-400 font-medium">No files selected yet</p>
+                    </div>
+                  </div>
+                )}
+
+                <button 
+                  onClick={handleUpload}
+                  disabled={files.length === 0 || uploading}
+                  className={`w-full mt-4 py-3.5 rounded-xl text-sm font-bold text-white transition-all shadow-sm ${
+                    files.length > 0 ? "bg-indigo-600 hover:bg-indigo-700 shadow-indigo-200" : "bg-slate-300 cursor-not-allowed"
+                  }`}
+                >
+                  {uploading ? "Uploading..." : `Process ${files.length > 0 ? files.length : ''} Catalog${files.length !== 1 ? 's' : ''}`}
+                </button>
               </div>
             </div>
-          </motion.div>
-        </div>
+          )}
+        </motion.div>
+
       </div>
     </div>
   );

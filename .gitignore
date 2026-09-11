@@ -39,5 +39,17 @@ Thumbs.db
 *.swp
 
 #other
+uploads/
+*.db-shm
+*.db-wal
+.agents/
+
+# Test / utility scripts (keep locally, not in repo)
+backend/test_*.py
+backend/inspect_*.py
+backend/clear_*.py
+backend/recreate_db.py
+backend/scratch_*.py
+prompt.txt
 
 problem_statement.md 

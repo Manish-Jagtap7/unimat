@@ -44,8 +44,8 @@ class Settings(BaseSettings):
     # ─── Classification Thresholds ──────────────────────────────────────────────
     # Tuned for BGE-base Dense Cosine Similarity with improved NLP preprocessing.
     # Optimal values found via systematic threshold sweep on diverse industrial data.
-    DUPLICATE_THRESHOLD: float = 0.90
-    NEAR_DUPLICATE_THRESHOLD: float = 0.77
+    DUPLICATE_THRESHOLD: float = 0.82
+    NEAR_DUPLICATE_THRESHOLD: float = 0.75
 
     # ─── LLM Batching ──────────────────────────────────────────────────────────
     LLM_BATCH_SIZE: int = 15

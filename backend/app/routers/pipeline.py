@@ -107,6 +107,33 @@ async def run_pipeline(
     return pipeline_runs
 
 
+@router.get("/status", response_model=PipelineStatusResponse)
+def get_latest_pipeline_status(db: Session = Depends(get_db)):
+    """Return the most recent pipeline run status (for frontend polling without run_id)."""
+    run = (
+        db.query(PipelineRun)
+        .order_by(PipelineRun.started_at.desc())
+        .first()
+    )
+    if not run:
+        raise HTTPException(status_code=404, detail="No pipeline runs found")
+
+    return PipelineStatusResponse(
+        id=run.id,
+        upload_session_id=run.upload_session_id,
+        status=run.status,
+        current_step=run.current_step,
+        progress_pct=run.progress_pct,
+        total_items=run.total_items,
+        duplicates_found=run.duplicates_found,
+        near_duplicates_found=run.near_duplicates_found,
+        unique_items=run.unique_items,
+        error_message=run.error_message,
+        started_at=run.started_at,
+        completed_at=run.completed_at,
+    )
+
+
 @router.get("/status/{run_id}", response_model=PipelineStatusResponse)
 def get_pipeline_status(run_id: int, db: Session = Depends(get_db)):
     """Poll the current status of a pipeline run."""

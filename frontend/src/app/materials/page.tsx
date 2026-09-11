@@ -52,7 +52,7 @@ const ChildBadge = ({ classification, score }: { classification: string; score: 
           <CheckCircle2 className="w-3 h-3 mr-1" />
           Duplicate
         </span>
-        <span className="text-xs font-bold text-emerald-600">{pct}%</span>
+        {score > 0 && <span className="text-xs font-bold text-emerald-600">{pct}%</span>}
       </div>
     );
   } else {

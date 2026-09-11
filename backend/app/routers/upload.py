@@ -55,21 +55,15 @@ def ensure_cpse_exists(db: Session, cpse_code: str) -> CPSEProfile:
 @router.post("", response_model=UploadResponse)
 async def upload_files(
     files: List[UploadFile] = File(...),
-    cpse_codes: List[str] = Form(...),
+    cpse_codes: List[str] = Form(default=[]),
     db: Session = Depends(get_db),
 ):
     """
     Upload multiple Excel/CSV files simultaneously.
     
-    Each file must have a corresponding CPSE code in the `cpse_codes` list.
-    If the uploaded file contains a 'CPSE_Source' column, it will be used
-    per-row; otherwise, the provided cpse_code applies to all rows.
+    CPSE codes are auto-detected from the 'CPSE_Source' column inside the file.
+    If no such column exists, falls back to cpse_codes provided in the form.
     """
-    if len(files) != len(cpse_codes):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Number of files ({len(files)}) must match number of CPSE codes ({len(cpse_codes)})",
-        )
 
     # Ensure upload directory exists
     os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
@@ -78,7 +72,7 @@ async def upload_files(
     total_rows = 0
     seen_cluster_ids = set()
 
-    for file, cpse_code in zip(files, cpse_codes):
+    for idx, file in enumerate(files):
         # Validate file type
         if not file.filename:
             raise HTTPException(status_code=400, detail="File must have a filename")
@@ -90,10 +84,7 @@ async def upload_files(
                 detail=f"Unsupported file type: .{ext}. Use .xlsx, .xls, or .csv",
             )
 
-        # Ensure CPSE profile exists
-        cpse = ensure_cpse_exists(db, cpse_code)
-
-        # Save file to disk
+        # Save file to disk first so we can read it
         saved_filename = f"{uuid.uuid4().hex}_{file.filename}"
         file_path = os.path.join(settings.UPLOAD_DIR, saved_filename)
         
@@ -110,6 +101,24 @@ async def upload_files(
         except Exception as e:
             os.remove(file_path)
             raise HTTPException(status_code=400, detail=f"Failed to parse {file.filename}: {e}")
+
+        # Auto-detect CPSE from CPSE_Source column inside the file
+        cpse_code = None
+        if "CPSE_Source" in df.columns:
+            first_valid = df["CPSE_Source"].dropna().astype(str).str.strip().str.upper()
+            if len(first_valid) > 0:
+                cpse_code = first_valid.iloc[0]
+        
+        # Fallback to form-provided cpse_codes
+        if not cpse_code and idx < len(cpse_codes):
+            cpse_code = cpse_codes[idx].upper().strip()
+        
+        # Last resort: extract from filename
+        if not cpse_code:
+            cpse_code = file.filename.split("_")[0].upper()
+
+        # Ensure CPSE profile exists
+        cpse = ensure_cpse_exists(db, cpse_code)
 
         # Validate required columns
         required_cols = {"Raw_Description"}

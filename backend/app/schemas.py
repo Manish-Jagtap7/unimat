@@ -4,6 +4,7 @@ UniMat AI — Pydantic Schemas
 Request/Response models for all API endpoints.
 """
 
+from enum import Enum
 from datetime import datetime
 from typing import Optional, List
 from pydantic import BaseModel, Field
@@ -150,6 +151,19 @@ class DashboardStats(BaseModel):
     average_accuracy: Optional[float] = None
 
 
+
+class ClusterAction(str, Enum):
+    APPROVE = "APPROVE"
+    RECONSTRUCT = "RECONSTRUCT"
+
+
+class ClusterResolveRequest(BaseModel):
+    action: ClusterAction
+    edited_name: Optional[str] = None
+    removed_item_ids: Optional[List[int]] = None
+    officer_name: str
+
+
 class RecentActivity(BaseModel):
     id: int
     cpse_code: str
@@ -171,6 +185,12 @@ class DashboardResponse(BaseModel):
 # ═══════════════════════════════════════════════════════════════════════════════
 # HITL Review
 # ═══════════════════════════════════════════════════════════════════════════════
+
+class ClusterReviewResponse(BaseModel):
+    """A full cluster pending review."""
+    root_item: MaterialItemResponse
+    children: List[MaterialItemResponse]
+    candidate_cnmc: Optional[NationalCodeResponse] = None
 
 class ReviewItemResponse(BaseModel):
     """A near-duplicate item pending review."""

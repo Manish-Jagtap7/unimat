@@ -19,41 +19,38 @@ from app.models import (
 from app.schemas import (
     ReviewItemResponse, ReviewResolveRequest, ReviewResolveResponse,
     MaterialItemResponse, NationalCodeResponse, AuditTrailResponse, AuditListResponse,
-    BulkApproveRequest
+    BulkApproveRequest, ClusterReviewResponse, ClusterResolveRequest, ClusterAction
 )
 
 router = APIRouter(prefix="/api/review", tags=["Review"])
 
 
-@router.get("/pending", response_model=List[ReviewItemResponse])
-def get_pending_reviews(
-    skip: int = 0,
-    limit: int = 50,
-    db: Session = Depends(get_db),
-):
+@router.get("/clusters/pending", response_model=List[ClusterReviewResponse])
+def get_pending_clusters(db: Session = Depends(get_db)):
     """
-    List all Near-Duplicate items awaiting HITL review.
-    
-    Returns items with their candidate CNMC match for side-by-side comparison.
+    Fetch all clusters that have at least one item pending review.
     """
-    items = (
+    pending_children = (
         db.query(MaterialItem)
         .filter(
             MaterialItem.classification == Classification.NEAR_DUPLICATE,
             MaterialItem.review_status == ReviewStatus.PENDING,
         )
-        .order_by(MaterialItem.similarity_score.desc())
-        .offset(skip)
-        .limit(limit)
         .all()
     )
-
+    
+    cluster_root_ids = list(set([child.matched_material_id for child in pending_children if child.matched_material_id]))
+    
     results = []
-    for item in items:
-        # Resolve candidate CNMC
+    for root_id in cluster_root_ids:
+        root_item = db.query(MaterialItem).filter(MaterialItem.id == root_id).first()
+        if not root_item: continue
+        
+        children = db.query(MaterialItem).filter(MaterialItem.matched_material_id == root_id).all()
+        
         candidate = None
-        if item.matched_cnmc_id:
-            nc = db.query(NationalCode).filter(NationalCode.id == item.matched_cnmc_id).first()
+        if root_item.matched_cnmc_id:
+            nc = db.query(NationalCode).filter(NationalCode.id == root_item.matched_cnmc_id).first()
             if nc:
                 candidate = NationalCodeResponse(
                     id=nc.id,
@@ -63,9 +60,9 @@ def get_pending_reviews(
                     source=nc.source,
                     created_at=nc.created_at,
                 )
-
-        results.append(ReviewItemResponse(
-            material_item=MaterialItemResponse(
+                
+        def to_response(item):
+            return MaterialItemResponse(
                 id=item.id,
                 cpse_source=item.cpse_source,
                 legacy_item_code=item.legacy_item_code,
@@ -78,121 +75,61 @@ def get_pending_reviews(
                 standardized_description=candidate.standardized_description if candidate else None,
                 review_status=item.review_status,
                 created_at=item.created_at,
-            ),
-            candidate_cnmc=candidate,
-            similarity_score=item.similarity_score or 0.0,
+            )
+            
+        results.append(ClusterReviewResponse(
+            root_item=to_response(root_item),
+            children=[to_response(c) for c in children],
+            candidate_cnmc=candidate
         ))
-
+        
     return results
 
 
-@router.post("/{item_id}/resolve", response_model=ReviewResolveResponse)
-def resolve_review(
-    item_id: int,
-    request: ReviewResolveRequest,
+@router.post("/cluster/{cluster_id}/resolve")
+def resolve_cluster(
+    cluster_id: int,
+    request: ClusterResolveRequest,
     db: Session = Depends(get_db),
 ):
     """
-    Resolve a Near-Duplicate review.
-    
-    Actions:
-    - APPROVE: Merge the item into the candidate CNMC.
-    - REJECT: Mark as unique; will be sent for new CNMC generation.
-    - OVERRIDE: Manually assign a custom CNMC code.
+    Resolve a full cluster review.
     """
-    item = db.query(MaterialItem).filter(MaterialItem.id == item_id).first()
-    if not item:
-        raise HTTPException(status_code=404, detail="Material item not found")
+    root_item = db.query(MaterialItem).filter(MaterialItem.id == cluster_id).first()
+    if not root_item:
+        raise HTTPException(status_code=404, detail="Cluster root not found")
+        
+    children = db.query(MaterialItem).filter(MaterialItem.matched_material_id == cluster_id).all()
+    
+    if request.edited_name and root_item.matched_cnmc_id:
+        nc = db.query(NationalCode).filter(NationalCode.id == root_item.matched_cnmc_id).first()
+        if nc:
+            nc.standardized_description = request.edited_name
+            db.add(nc)
 
-    if item.review_status == ReviewStatus.RESOLVED:
-        raise HTTPException(status_code=409, detail="This item has already been resolved")
+    if request.action == ClusterAction.APPROVE:
+        for child in children:
+            child.review_status = ReviewStatus.RESOLVED
+            child.similarity_score = None # Clear percentage
+            child.classification = Classification.DUPLICATE
+            
+    elif request.action == ClusterAction.RECONSTRUCT:
+        for child in children:
+            if request.removed_item_ids and child.id in request.removed_item_ids:
+                child.classification = Classification.UNIQUE
+                child.matched_material_id = None
+                child.matched_cnmc_id = None
+                child.similarity_score = None
+                child.review_status = None
+            else:
+                child.review_status = ReviewStatus.RESOLVED
+                child.similarity_score = None
+                child.classification = Classification.DUPLICATE
 
-    old_cnmc_id = item.matched_cnmc_id
-    new_cnmc_id = None
-
-    if request.action == ReviewAction.APPROVE:
-        # Approve the merge — map to the candidate CNMC
-        if not item.matched_cnmc_id:
-            raise HTTPException(status_code=400, detail="No candidate CNMC to approve")
-
-        new_cnmc_id = item.matched_cnmc_id
-
-        # Create legacy mapping
-        mapping = LegacyMapping(
-            material_item_id=item.id,
-            cnmc_id=new_cnmc_id,
-            cpse_source=item.cpse_source,
-            legacy_code=item.legacy_item_code,
-        )
-        db.add(mapping)
-
-        # Update item classification to DUPLICATE (confirmed by human)
-        item.classification = Classification.DUPLICATE
-        item.review_status = ReviewStatus.RESOLVED
-
-    elif request.action == ReviewAction.REJECT:
-        # Reject the merge — reclassify as UNIQUE for new CNMC generation
-        item.classification = Classification.UNIQUE
-        item.matched_cnmc_id = None
-        item.review_status = ReviewStatus.RESOLVED
-
-    elif request.action == ReviewAction.OVERRIDE:
-        # Manual override — create or find the specified CNMC
-        if not request.override_cnmc_code or not request.override_description:
-            raise HTTPException(
-                status_code=400,
-                detail="override_cnmc_code and override_description are required for OVERRIDE action",
-            )
-
-        # Check if CNMC already exists
-        existing = db.query(NationalCode).filter(
-            NationalCode.cnmc_code == request.override_cnmc_code
-        ).first()
-
-        if existing:
-            new_cnmc_id = existing.id
-        else:
-            new_nc = NationalCode(
-                cnmc_code=request.override_cnmc_code,
-                standardized_description=request.override_description,
-                source="MANUAL",
-            )
-            db.add(new_nc)
-            db.flush()
-            new_cnmc_id = new_nc.id
-
-        item.matched_cnmc_id = new_cnmc_id
-        item.classification = Classification.DUPLICATE
-        item.review_status = ReviewStatus.RESOLVED
-
-        # Create legacy mapping
-        mapping = LegacyMapping(
-            material_item_id=item.id,
-            cnmc_id=new_cnmc_id,
-            cpse_source=item.cpse_source,
-            legacy_code=item.legacy_item_code,
-        )
-        db.add(mapping)
-
-    # Create audit trail entry
-    audit = AuditTrail(
-        material_item_id=item.id,
-        action=request.action,
-        old_cnmc_id=old_cnmc_id,
-        new_cnmc_id=new_cnmc_id,
-        officer_name=request.officer_name,
-        reason=request.reason,
-    )
-    db.add(audit)
+    root_item.review_status = ReviewStatus.RESOLVED
     db.commit()
-    db.refresh(audit)
-
-    return ReviewResolveResponse(
-        message=f"Review resolved: {request.action.value}",
-        audit_id=audit.id,
-        material_item_id=item.id,
-        action=request.action,
-    )
+    
+    return {"message": f"Cluster resolved: {request.action.value}"}
 
 
 @router.get("/audit", response_model=AuditListResponse)
