@@ -12,31 +12,56 @@ from typing import List, Tuple
 logger = logging.getLogger("unimat.nlp")
 
 # ─── Abbreviation Expansion Map ────────────────────────────────────────────────
-# Ported and extended from the original Streamlit prototype
+# All abbreviations EXPAND to full readable words so the embedding model
+# (trained on general English) understands the domain terms better.
+# This is a generic industrial vocabulary — not specific to any dataset.
 ABBREVIATIONS = {
     # Valve types
     "VLV": "VALVE", "GTE": "GATE", "CHK": "CHECK", "GLB": "GLOBE",
-    # Materials
+    "BFLY": "BUTTERFLY", "NRV": "NON RETURN VALVE",
+    # Product types / Components
+    "FLG": "FLANGE", "GSKT": "GASKET", "BRG": "BEARING",
+    "BLT": "BOLT", "CBL": "CABLE", "LUB": "LUBRICANT", "GRS": "GREASE",
+    # Materials / Chemicals
     "CS": "CARBON STEEL", "SS": "STAINLESS STEEL", "STL": "STEEL",
+    "CU": "COPPER", "ALUM": "ALUMINIUM", "GI": "GALVANIZED IRON",
+    "HDPE": "HIGH DENSITY POLYETHYLENE", "LITH": "LITHIUM", "NIT": "NITRILE",
+    # Mechanical components
     "CENTRFGL": "CENTRIFUGAL", "CENT.": "CENTRIFUGAL",
-    # Units & Dimensions
-    "INCH": "IN", "LB": "#", "CLASS ": "CL ", "DEG ": "DEG",
-    "MTR": "M", "SMLS": "SEAMLESS", "FLG": "FLANGED", "SQMM": "SQ MM",
-    "SQ.MM": "SQ MM", "MM2": "SQ MM",
+    "SMLS": "SEAMLESS", "ERW": "ELECTRIC RESISTANCE WELDED",
+    # Dimensions — expand to full words for better embedding
+    "NB": "NOMINAL BORE", "OD": "OUTSIDE DIAMETER", "ID": "INSIDE DIAMETER",
+    "DIA": "DIAMETER", "THK": "THICK", "LEN": "LENGTH",
+    "SQMM": "SQ MM", "SQ.MM": "SQ MM", "MM2": "SQ MM",
+    "MTR": "METER",
+    # Pressure & Class
+    "SCH": "SCHEDULE",
     # Flow/Pump
-    "HORIZ ": "HORIZONTAL ", "CUM/HR": "M3/HR", "CU.M/HR": "M3/HR",
+    "HORIZ": "HORIZONTAL", "CUM/HR": "M3/HR", "CU.M/HR": "M3/HR",
     # Fittings
-    "WNRF": "WELD NECK RAISED FACE", "BW": "BUTT WELD",
-    "RF": "RAISED FACE", "SW": "SPIRAL WOUND",
-    "GSKT": "GASKET", "BRG": "BEARING", "BLT": "BOLT",
+    "WNRF": "WELD NECK RAISED FACE", "WN": "WELD NECK",
+    "BW": "BUTT WELD", "RF": "RAISED FACE",
     "CON": "CONCENTRIC", "CONC": "CONCENTRIC",
     "LR": "LONG RADIUS", "EQ": "EQUAL",
+    # Seals / Gaskets
+    "SW": "SPIRAL WOUND", "SPWD": "SPIRAL WOUND", "SWG": "SPIRAL WOUND GASKET",
+    "GRPH": "GRAPHITE", "GR": "GRAPHITE", "GRA": "GRAPHITE", "NBR": "NITRILE RUBBER",
+    "DURO": "SHORE",
     # Cable/Electrical
-    "ARM": "ARMOURED", "PWR": "POWER", "CTRL": "CONTROL",
+    "ARMR": "ARMOURED", "ARM": "ARMOURED",
+    "PWR": "POWER", "CTRL": "CONTROL",
     "XLPE": "XLPE", "PVC": "PVC",
+    "MCCB": "MOLDED CASE CIRCUIT BREAKER",
     # Instruments
-    "PRESS": "PRESSURE", "PT": "PRESSURE TRANSMITTER",
-    "TW": "THERMOWELL",
+    "PRESS": "PRESSURE", "XMITR": "TRANSMITTER", "TX": "TRANSMITTER",
+    "PT": "PRESSURE TRANSMITTER", "TW": "THERMOWELL",
+    "RTD": "RESISTANCE TEMPERATURE DETECTOR",
+    "DMM": "DIGITAL MULTIMETER",
+    "NPT": "NATIONAL PIPE THREAD",
+    # Attributes / Misc
+    "SFTY": "SAFETY", "YEL": "YELLOW", "COMP": "COMPLEX", "EP": "EXTREME PRESSURE",
+    # Assembly / General
+    "ASSY": "ASSEMBLY",
     # Standards
     "DG": "DEEP GROOVE", "TEFC": "TOTALLY ENCLOSED FAN COOLED",
     "3PH": "3 PHASE",
@@ -90,24 +115,29 @@ def clean_text(text: str) -> str:
     
     Pipeline:
     1. Uppercase normalization
-    2. Abbreviation expansion
-    3. Special character cleanup
-    4. Whitespace normalization
+    2. Replace hyphens with spaces (so coded items tokenize like descriptions)
+    3. Abbreviation expansion
+    4. Special character cleanup
+    5. Whitespace normalization
     """
     if not text or str(text).strip() == "":
         return ""
 
     text = str(text).upper().strip()
 
-    # Expand abbreviations
+    # Normalize quote marks used as inch symbol
+    text = text.replace('"', ' INCH ')
+    text = text.replace("''", ' INCH ')
+
+    # Replace hyphens with spaces so coded items (FLG-WN-SS316-2IN)
+    # tokenize the same as space-separated descriptions
+    text = text.replace('-', ' ')
+
+    # Expand abbreviations (after hyphen breaking so word boundaries match)
     text = expand_abbreviations(text)
 
-    # Normalize quote marks used as inch symbol
-    text = text.replace('"', ' IN ')
-    text = text.replace("''", ' IN ')
-
-    # Keep alphanumeric, periods, hyphens, slashes, hash (for class #)
-    text = re.sub(r'[^A-Z0-9.\#\-\/\~\s]', ' ', text)
+    # Keep alphanumeric, periods, slashes, hash (for class #), spaces
+    text = re.sub(r'[^A-Z0-9.\#\/\s]', ' ', text)
 
     # Collapse whitespace
     text = " ".join(text.split())
@@ -151,27 +181,26 @@ def standardize(raw_description: str, uom: str = "") -> Tuple[str, dict]:
     
     Args:
         raw_description: The raw material description from the CPSE.
-        uom: Unit of measurement.
+        uom: Unit of measurement (kept as metadata, NOT embedded).
     
     Returns:
         Tuple of (parsed_string, extracted_specs_dict)
     """
-    # Combine description and UOM
-    combined = f"{raw_description} {uom}".strip()
+    # UOM is intentionally excluded from the parsed string.
+    # Terms like NOS, EA, SET, NUM are noise that reduces embedding similarity
+    # between items that describe the same material with different UOMs.
 
-    # Step 1: Clean and expand
-    parsed = clean_text(combined)
+    # Step 1: Clean and expand (description only, no UOM)
+    parsed = clean_text(raw_description)
 
     # Step 2: Extract structured specs (for metadata, not for the embedding string)
-    specs = extract_specs(combined.upper())
+    specs = extract_specs(raw_description.upper())
+    if uom:
+        specs["uom"] = uom.upper().strip()
 
-    # Step 3: spaCy entity extraction (supplementary)
-    entities = spacy_extract_entities(raw_description)
-    if entities:
-        # Append any entities not already in the parsed string
-        for ent in entities:
-            if ent not in parsed:
-                parsed = f"{parsed} {ent}"
+    # Note: spaCy entity extraction was removed because the abbreviation expansion
+    # already handles domain terms, and spaCy's general NER was appending duplicate
+    # noise (e.g., "CS 4 INCH 300#") that reduced embedding similarity accuracy.
 
     return parsed, specs
 

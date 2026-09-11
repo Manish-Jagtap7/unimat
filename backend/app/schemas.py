@@ -113,8 +113,8 @@ class NationalCodeResponse(BaseModel):
 
 class PipelineRunRequest(BaseModel):
     session_ids: List[int] = Field(..., description="Upload session IDs to process")
-    dup_threshold: Optional[float] = 0.95
-    near_dup_threshold: Optional[float] = 0.85
+    dup_threshold: Optional[float] = None
+    near_dup_threshold: Optional[float] = None
 
 
 class PipelineStatusResponse(BaseModel):
@@ -233,4 +233,4 @@ class HealthResponse(BaseModel):
     status: str
     version: str
     database: str
-    chromadb: str
+    vector_db: str

@@ -42,9 +42,10 @@ class Settings(BaseSettings):
     PORT: int = 8000
 
     # ─── Classification Thresholds ──────────────────────────────────────────────
-    # Tuned for BGE-base Dense Cosine Similarity + Reranker Penalty Filtering
-    DUPLICATE_THRESHOLD: float = 0.85
-    NEAR_DUPLICATE_THRESHOLD: float = 0.70
+    # Tuned for BGE-base Dense Cosine Similarity with improved NLP preprocessing.
+    # Optimal values found via systematic threshold sweep on diverse industrial data.
+    DUPLICATE_THRESHOLD: float = 0.90
+    NEAR_DUPLICATE_THRESHOLD: float = 0.77
 
     # ─── LLM Batching ──────────────────────────────────────────────────────────
     LLM_BATCH_SIZE: int = 15

@@ -142,7 +142,7 @@ def root():
 def health_check():
     """Health check endpoint."""
     db_status = "connected"
-    chroma_status = "ready"
+    vector_status = "ready"
 
     try:
         from sqlalchemy import text
@@ -157,5 +157,5 @@ def health_check():
         status="healthy",
         version="2.0.0",
         database=db_status,
-        chromadb=chroma_status,
+        vector_db=vector_status,
     )

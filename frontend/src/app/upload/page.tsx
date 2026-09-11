@@ -10,8 +10,6 @@ export default function UploadPage() {
   const [files, setFiles] = useState<File[]>([]);
   const [cpse, setCpse] = useState("");
   const [uploading, setUploading] = useState(false);
-  const [dupThreshold, setDupThreshold] = useState(0.95);
-  const [nearDupThreshold, setNearDupThreshold] = useState(0.85);
 
   const handleDrag = (e: React.DragEvent) => {
     e.preventDefault();
@@ -72,9 +70,7 @@ export default function UploadPage() {
       const sessionIds = response.data.sessions.map((s: any) => s.id);
       
       await api.post('/api/pipeline/run', {
-        session_ids: sessionIds,
-        dup_threshold: dupThreshold,
-        near_dup_threshold: nearDupThreshold
+        session_ids: sessionIds
       });
 
       setFiles([]);
@@ -124,47 +120,7 @@ export default function UploadPage() {
             </select>
           </div>
 
-          {/* Threshold Sliders */}
-          <div className="pt-4 border-t border-slate-100 mb-8">
-            <h3 className="text-sm font-bold text-slate-800 flex items-center mb-4">
-              <Zap className="w-4 h-4 mr-2 text-indigo-500" />
-              AI Tuning Parameters
-            </h3>
-            
-            <div className="space-y-6">
-              <div>
-                <div className="flex justify-between mb-2">
-                  <label className="text-xs font-semibold text-slate-500">Duplicate Threshold</label>
-                  <span className="text-xs font-bold text-indigo-600">{Math.round(dupThreshold * 100)}%</span>
-                </div>
-                <input 
-                  type="range" 
-                  min="80" 
-                  max="100" 
-                  value={dupThreshold * 100} 
-                  onChange={(e) => setDupThreshold(parseInt(e.target.value) / 100)}
-                  className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
-                />
-                <p className="text-[10px] text-slate-400 mt-1">Similarity required to auto-map as Duplicate.</p>
-              </div>
-              
-              <div>
-                <div className="flex justify-between mb-2">
-                  <label className="text-xs font-semibold text-slate-500">Near-Duplicate Threshold</label>
-                  <span className="text-xs font-bold text-amber-600">{Math.round(nearDupThreshold * 100)}%</span>
-                </div>
-                <input 
-                  type="range" 
-                  min="60" 
-                  max="90" 
-                  value={nearDupThreshold * 100} 
-                  onChange={(e) => setNearDupThreshold(parseInt(e.target.value) / 100)}
-                  className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-amber-500"
-                />
-                <p className="text-[10px] text-slate-400 mt-1">Similarity required to flag for HITL Review.</p>
-              </div>
-            </div>
-          </div>
+
 
           {/* Drag & Drop Area */}
           <div 

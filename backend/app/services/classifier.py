@@ -1,7 +1,7 @@
 """
 UniMat AI — Tri-State Classifier
 
-Categorizes material items based on cosine similarity against the ChromaDB index:
+Categorizes material items based on cosine similarity against the Qdrant index:
   - DUPLICATE (>0.95):       Auto-mapped to existing CNMC.
   - NEAR_DUPLICATE (0.85-0.95): Flagged for HITL review.
   - UNIQUE (<0.85):          Sent to LLM for new CNMC generation.
@@ -25,7 +25,7 @@ class ClassificationResult:
     item_id: int
     classification: Classification
     similarity_score: float
-    matched_chroma_id: Optional[str] = None  # ChromaDB document ID of best match
+    matched_vector_id: Optional[str] = None  # Qdrant document ID of best match
     matched_metadata: Optional[dict] = None
 
 
@@ -69,7 +69,7 @@ def classify_batch(
                 item_id=item_id,
                 classification=Classification.UNIQUE,
                 similarity_score=0.0,
-                matched_chroma_id=None,
+                matched_vector_id=None,
                 matched_metadata=None,
             )
         else:
@@ -81,7 +81,7 @@ def classify_batch(
                 item_id=item_id,
                 classification=classification,
                 similarity_score=round(best_similarity, 4),
-                matched_chroma_id=best_id,
+                matched_vector_id=best_id,
                 matched_metadata=best_metadata,
             )
         

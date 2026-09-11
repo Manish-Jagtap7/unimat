@@ -8,11 +8,15 @@ import asyncio
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+import logging
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.database import get_db
 from app.models import PipelineRun, UploadSession, PipelineStatus
 from app.schemas import PipelineRunRequest, PipelineStatusResponse
+
+logger = logging.getLogger("unimat")
 
 router = APIRouter(prefix="/api/pipeline", tags=["Pipeline"])
 
@@ -34,6 +38,10 @@ async def run_pipeline(
     """
     pipeline_runs = []
 
+    # We collect all run_ids to process them sequentially in a single background task
+    # to avoid race conditions with Qdrant vector insertions.
+    run_ids = []
+    
     for session_id in request.session_ids:
         # Validate session exists
         session = db.query(UploadSession).filter(UploadSession.id == session_id).first()
@@ -64,14 +72,8 @@ async def run_pipeline(
         db.add(run)
         db.commit()
         db.refresh(run)
-
-        # Schedule background processing (actual implementation in Phase 2)
-        background_tasks.add_task(
-            _execute_pipeline, 
-            run.id, 
-            request.dup_threshold, 
-            request.near_dup_threshold
-        )
+        
+        run_ids.append(run.id)
 
         pipeline_runs.append(PipelineStatusResponse(
             id=run.id,
@@ -87,6 +89,20 @@ async def run_pipeline(
             started_at=run.started_at,
             completed_at=run.completed_at,
         ))
+
+    # Resolve thresholds: use request values if provided, else config defaults
+    settings = get_settings()
+    dup_t = request.dup_threshold if request.dup_threshold is not None else settings.DUPLICATE_THRESHOLD
+    near_t = request.near_dup_threshold if request.near_dup_threshold is not None else settings.NEAR_DUPLICATE_THRESHOLD
+
+    # Schedule background processing
+    if run_ids:
+        background_tasks.add_task(
+            _execute_pipeline_batch, 
+            run_ids, 
+            dup_t, 
+            near_t
+        )
 
     return pipeline_runs
 
@@ -147,17 +163,17 @@ def get_pipeline_history(
     ]
 
 
-async def _execute_pipeline(run_id: int, dup_threshold: float = 0.95, near_dup_threshold: float = 0.85):
+async def _execute_pipeline_batch(run_ids: List[int], dup_threshold: float, near_dup_threshold: float):
     """
     Background task that delegates to the full pipeline orchestrator.
-    
-    Pipeline steps:
-    1. NLP Standardization (spaCy + Regex)
-    2. Vector Embedding (ChromaDB + BGE)
-    3. Tri-State Classification
-    4. LLM Batch Code Generation (Gemini)
-    5. Persist results to PostgreSQL
+    Processes multiple pipeline runs sequentially to ensure vector DB integrity.
     """
     from app.services.pipeline import execute
-    execute(run_id, dup_threshold, near_dup_threshold)
-
+    
+    for run_id in run_ids:
+        logger.info(f"🚀 Starting background pipeline run {run_id} (Dups: >{dup_threshold}, Near: {near_dup_threshold}-{dup_threshold})")
+        try:
+            execute(run_id, dup_threshold, near_dup_threshold)
+            logger.info(f"✅ Background pipeline run {run_id} finished successfully!")
+        except Exception as e:
+            logger.error(f"❌ Background pipeline run {run_id} FAILED: {str(e)}", exc_info=True)

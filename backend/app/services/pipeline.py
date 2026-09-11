@@ -3,7 +3,7 @@ UniMat AI — Pipeline Orchestrator
 
 Coordinates the full AI processing pipeline:
   Step 1: NLP Standardization (spaCy + Regex)
-  Step 2: Vector Embedding & Indexing (ChromaDB + BGE)
+  Step 2: Vector Embedding & Indexing (Qdrant + BGE)
   Step 3: Tri-State Classification (Duplicate / Near-Duplicate / Unique)
   Step 4: LLM Batch Code Generation (Gemini) for Unique items
   Step 5: Persist results to PostgreSQL
@@ -33,7 +33,7 @@ def _update_progress(db: Session, run: PipelineRun, step: str, pct: float):
     db.commit()
 
 
-def execute(run_id: int, dup_threshold: float = 0.95, near_dup_threshold: float = 0.85):
+def execute(run_id: int, dup_threshold: float, near_dup_threshold: float):
     """
     Execute the full AI pipeline for a given pipeline run.
     
@@ -98,10 +98,10 @@ def execute(run_id: int, dup_threshold: float = 0.95, near_dup_threshold: float 
         _update_progress(db, run, "VECTOR_EMBEDDING", 30.0)
         logger.info("Step 2: Vector Embedding & Indexing")
 
-        # Prepare data for ChromaDB
-        chroma_ids = [f"item_{item.id}" for item in items]
-        chroma_docs = [item.parsed_string for item in items]
-        chroma_metas = [
+        # Prepare data for Qdrant
+        vector_ids = [f"item_{item.id}" for item in items]
+        vector_docs = [item.parsed_string for item in items]
+        vector_metas = [
             {
                 "item_id": str(item.id),
                 "cpse_source": item.cpse_source,
@@ -117,11 +117,11 @@ def execute(run_id: int, dup_threshold: float = 0.95, near_dup_threshold: float 
         logger.info("Step 2 & 3: Sequential Classification")
 
         classification_results = []
-        for item, chroma_id, chroma_doc, chroma_meta in zip(items, chroma_ids, chroma_docs, chroma_metas):
-            # 1. Query existing ChromaDB for nearest neighbors
+        for item, vector_id, vector_doc, vector_meta in zip(items, vector_ids, vector_docs, vector_metas):
+            # 1. Query existing Qdrant index for nearest neighbors
             match_results = vector_service.query_batch(
-                query_texts=[chroma_doc],
-                query_ids=[chroma_id],
+                query_texts=[vector_doc],
+                query_ids=[vector_id],
                 n_results=1,
             )
 
@@ -135,12 +135,12 @@ def execute(run_id: int, dup_threshold: float = 0.95, near_dup_threshold: float 
             )[0]
             classification_results.append(result)
 
-            # 3. Add item to ChromaDB only if it's a new cluster center (UNIQUE)
+            # 3. Add item to Qdrant only if it's a new cluster center (UNIQUE)
             if result.classification == Classification.UNIQUE:
-                vector_service.add_items([chroma_id], [chroma_doc], [chroma_meta])
+                vector_service.add_items([vector_id], [vector_doc], [vector_meta])
 
-        # Build a lookup: chroma_id -> item for resolving matched CNMC IDs
-        chroma_id_to_item = {f"item_{item.id}": item for item in items}
+        # Build a lookup: vector_id -> item for resolving matched CNMC IDs
+        vector_id_to_item = {f"item_{item.id}": item for item in items}
         # Apply classifications to material items
         for result in classification_results:
             item = db.query(MaterialItem).filter(MaterialItem.id == result.item_id).first()
@@ -154,17 +154,17 @@ def execute(run_id: int, dup_threshold: float = 0.95, near_dup_threshold: float 
                 if result.classification == Classification.NEAR_DUPLICATE:
                     item.review_status = ReviewStatus.PENDING
 
-                if result.matched_chroma_id:
-                    matched_item = chroma_id_to_item.get(result.matched_chroma_id)
+                if result.matched_vector_id:
+                    matched_item = vector_id_to_item.get(result.matched_vector_id)
                     if not matched_item:
                         try:
-                            m_id = int(result.matched_chroma_id.replace("item_", ""))
+                            m_id = int(result.matched_vector_id.replace("item_", ""))
                             matched_item = db.query(MaterialItem).filter(MaterialItem.id == m_id).first()
                         except Exception:
                             pass
                     
                     if matched_item:
-                        # Since we only add UNIQUE items to ChromaDB, matched_item is guaranteed to be a root parent.
+                        # Since we only add UNIQUE items to Qdrant, matched_item is guaranteed to be a root parent.
                         item.matched_material_id = matched_item.id
                         
                         if matched_item.matched_cnmc_id:
@@ -210,25 +210,54 @@ def execute(run_id: int, dup_threshold: float = 0.95, near_dup_threshold: float 
             .first()
         )
         if upload_session:
-            # Calculate clustering mapping accuracy based on ground truth
-            correct = 0
-            total_evaluated = 0
-            for item in items:
-                if item.matched_material_id is not None and item.ground_truth_cluster_id:
-                    # It was mapped to a parent
-                    parent = next((p for p in items if p.id == item.matched_material_id), None)
-                    if not parent:
-                        parent = db.query(MaterialItem).filter(MaterialItem.id == item.matched_material_id).first()
-                        
-                    if parent and parent.ground_truth_cluster_id:
-                        total_evaluated += 1
-                        if str(item.ground_truth_cluster_id).strip() == str(parent.ground_truth_cluster_id).strip():
-                            correct += 1
+            # Reload items from DB to get the committed classifications.
+            # The original `items` list has stale ORM objects with classification=None
+            # because line 146 creates new ORM instances during classification writes.
+            fresh_items = (
+                db.query(MaterialItem)
+                .filter(MaterialItem.upload_session_id == session_id)
+                .order_by(MaterialItem.id)
+                .all()
+            )
             
-            if total_evaluated > 0:
+            # Calculate accuracy against ground truth (when available).
+            # We evaluate each item's correctness against the global database state
+            # so that cross-session (multi-file) matches are accurately scored.
+            items_with_gt = [i for i in fresh_items if i.ground_truth_cluster_id]
+            
+            if items_with_gt:
+                correct = 0
+                total_evaluated = len(items_with_gt)
+                
+                for item in items_with_gt:
+                    gt_cluster = str(item.ground_truth_cluster_id).strip()
+                    
+                    if item.classification == Classification.UNIQUE:
+                        # To be correctly UNIQUE, there must be NO prior item with this same GT cluster
+                        prior_item = (
+                            db.query(MaterialItem)
+                            .filter(
+                                MaterialItem.ground_truth_cluster_id == gt_cluster,
+                                MaterialItem.id < item.id
+                            )
+                            .first()
+                        )
+                        if not prior_item:
+                            correct += 1
+                            
+                    elif item.classification in (Classification.DUPLICATE, Classification.NEAR_DUPLICATE):
+                        # To be correctly matched, it must point to a parent in the SAME GT cluster
+                        if item.matched_material_id is not None:
+                            # We must query DB since the parent might be from a previous upload session
+                            parent = db.query(MaterialItem).filter(MaterialItem.id == item.matched_material_id).first()
+                            if parent and parent.ground_truth_cluster_id:
+                                if str(parent.ground_truth_cluster_id).strip() == gt_cluster:
+                                    correct += 1
+                
                 upload_session.accuracy_score = round(correct / total_evaluated, 4)
+                logger.info(f"Accuracy: {correct}/{total_evaluated} = {upload_session.accuracy_score * 100:.1f}%")
             else:
-                upload_session.accuracy_score = 1.0  # If no ground truth available, default to 100% or leave None
+                upload_session.accuracy_score = None  # No ground truth data available
                 
                 
             upload_session.status = PipelineStatus.COMPLETED
