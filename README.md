@@ -84,13 +84,13 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 | **Backend** | FastAPI (Python 3.11) |
 | **Database** | PostgreSQL |
 | **Vector DB** | Qdrant (local, file-backed) |
-| **Embeddings** | BAAI/bge-base-en-v1.5 (384-dim dense) |
+| **Embeddings** | BAAI/bge-base-en-v1.5 (768-dim dense) |
 | **LLM** | Google Gemini 2.5 Flash |
-| **NLP** | spaCy + custom abbreviation expansion |
+| **NLP** | Regex + custom abbreviation expansion |
 
 ## Pipeline
 
-1. **NLP Standardization** — spaCy tokenization, abbreviation expansion, unit normalization
+1. **NLP Standardization** — Regex tokenization, abbreviation expansion, unit normalization
 2. **Vector Embedding** — BGE dense embeddings indexed in Qdrant
 3. **Tri-State Classification** — Duplicate (≥82%) / Near-Duplicate (75-82%) / Unique (<75%)
 4. **LLM Code Generation** — Gemini generates standardized CNMC names for unique clusters

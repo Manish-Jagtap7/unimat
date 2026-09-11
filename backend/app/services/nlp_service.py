@@ -1,7 +1,7 @@
 """
 UniMat AI — NLP Standardization Service
 
-Combines spaCy entity extraction with regex-based abbreviation expansion
+Combines regex-based tokenization with abbreviation expansion
 to produce clean, standardized material descriptions for vector embedding.
 """
 
