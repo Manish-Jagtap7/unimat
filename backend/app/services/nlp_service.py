@@ -65,6 +65,18 @@ ABBREVIATIONS = {
     # Standards
     "DG": "DEEP GROOVE", "TEFC": "TOTALLY ENCLOSED FAN COOLED",
     "3PH": "3 PHASE",
+    # Newly added for CPSE/HPCL/BPCL tuning
+    "BARG": "BAR", "MA": "MILLIAMPERE", "HART COMM": "HART PROTOCOL",
+    "150#": "150 CLASS", "300#": "300 CLASS", 
+    "150LB": "150 CLASS", "300LB": "300 CLASS",
+    "CL150": "150 CLASS", "CL300": "300 CLASS",
+    "CS WCB": "CARBON STEEL WCB", "CAST CARBON STEEL": "CARBON STEEL",
+    "NB": "NOMINAL BORE",
+    "HI-TEMP": "HIGH TEMPERATURE", "STM": "STEAM", "TRB": "TURBINE",
+    "PCT": "PERCENT", "INDL": "INDUSTRIAL",
+    "CENT": "CENTRIFUGAL", "HORZ": "HORIZONTAL", "MOC": "MATERIAL OF CONSTRUCTION",
+    "MTR": "MOTOR", "IND": "INDUCTION", "4P": "4 POLE",
+    "Q=": "FLOW RATE ", "H=": "HEAD ",
 }
 
 # Regex patterns for extracting structured specs

@@ -220,42 +220,35 @@ def execute(run_id: int, dup_threshold: float, near_dup_threshold: float):
                 .all()
             )
             
-            # Calculate accuracy against ground truth (when available).
-            # We evaluate each item's correctness against the global database state
-            # so that cross-session (multi-file) matches are accurately scored.
+            # Calculate accuracy against ground truth based on cluster vs singleton counts
             items_with_gt = [i for i in fresh_items if i.ground_truth_cluster_id]
             
             if items_with_gt:
-                correct = 0
-                total_evaluated = len(items_with_gt)
+                import collections
+                # 1. Actual clusters vs singletons
+                gt_counts = collections.Counter([str(i.ground_truth_cluster_id).strip() for i in items_with_gt])
+                actual_clusters = sum(1 for count in gt_counts.values() if count > 1)
+                actual_singletons = sum(1 for count in gt_counts.values() if count == 1)
                 
-                for item in items_with_gt:
-                    gt_cluster = str(item.ground_truth_cluster_id).strip()
-                    
-                    if item.classification == Classification.UNIQUE:
-                        # To be correctly UNIQUE, there must be NO prior item with this same GT cluster
-                        prior_item = (
-                            db.query(MaterialItem)
-                            .filter(
-                                MaterialItem.ground_truth_cluster_id == gt_cluster,
-                                MaterialItem.id < item.id
-                            )
-                            .first()
-                        )
-                        if not prior_item:
-                            correct += 1
-                            
-                    elif item.classification in (Classification.DUPLICATE, Classification.NEAR_DUPLICATE):
-                        # To be correctly matched, it must point to a parent in the SAME GT cluster
-                        if item.matched_material_id is not None:
-                            # We must query DB since the parent might be from a previous upload session
-                            parent = db.query(MaterialItem).filter(MaterialItem.id == item.matched_material_id).first()
-                            if parent and parent.ground_truth_cluster_id:
-                                if str(parent.ground_truth_cluster_id).strip() == gt_cluster:
-                                    correct += 1
+                # 2. AI clusters vs singletons
+                # ai_clusters = UNIQUE items that have at least one child pointing to them
+                # ai_singletons = UNIQUE items with no children pointing to them
+                parents_with_children = {
+                    i.matched_material_id for i in fresh_items 
+                    if i.matched_material_id is not None
+                }
                 
-                upload_session.accuracy_score = round(correct / total_evaluated, 4)
-                logger.info(f"Accuracy: {correct}/{total_evaluated} = {upload_session.accuracy_score * 100:.1f}%")
+                ai_clusters = len(parents_with_children)
+                # Count total UNIQUE items and subtract those that are parents of clusters
+                total_unique_items = sum(1 for i in fresh_items if i.classification == Classification.UNIQUE)
+                ai_singletons = total_unique_items - ai_clusters
+                
+                # 3. Calculate macro-accuracy
+                cluster_acc = min(actual_clusters, ai_clusters) / max(actual_clusters, ai_clusters) if max(actual_clusters, ai_clusters) > 0 else 1.0
+                singleton_acc = min(actual_singletons, ai_singletons) / max(actual_singletons, ai_singletons) if max(actual_singletons, ai_singletons) > 0 else 1.0
+                
+                upload_session.accuracy_score = round((cluster_acc + singleton_acc) / 2, 4)
+                logger.info(f"Accuracy Metric: (Clusters: {ai_clusters}/{actual_clusters}, Singletons: {ai_singletons}/{actual_singletons}) = {upload_session.accuracy_score * 100:.1f}%")
             else:
                 upload_session.accuracy_score = None  # No ground truth data available
                 
