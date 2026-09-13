@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     # ─── Embedding Models ──────────────────────────────────────────────────────
     EMBEDDING_MODEL: str = "BAAI/bge-base-en-v1.5"
     SPARSE_MODEL: str = "Qdrant/bm25"
+    HF_HUB_OFFLINE: str = "0"
 
     # ─── Server ─────────────────────────────────────────────────────────────────
     HOST: str = "0.0.0.0"
@@ -65,4 +66,8 @@ class Settings(BaseSettings):
 @lru_cache()
 def get_settings() -> Settings:
     """Cached settings singleton."""
-    return Settings()
+    settings = Settings()
+    if settings.HF_HUB_OFFLINE == "1":
+        import os
+        os.environ["HF_HUB_OFFLINE"] = "1"
+    return settings
