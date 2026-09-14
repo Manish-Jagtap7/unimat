@@ -230,18 +230,17 @@ def execute(run_id: int, dup_threshold: float, near_dup_threshold: float):
                 actual_clusters = sum(1 for count in gt_counts.values() if count > 1)
                 actual_singletons = sum(1 for count in gt_counts.values() if count == 1)
                 
-                # 2. AI clusters vs singletons
-                # ai_clusters = UNIQUE items that have at least one child pointing to them
-                # ai_singletons = UNIQUE items with no children pointing to them
-                parents_with_children = {
-                    i.matched_material_id for i in fresh_items 
-                    if i.matched_material_id is not None
-                }
+                # 2. AI clusters vs singletons for the CURRENT session
+                assigned_cluster_ids = []
+                for i in fresh_items:
+                    if i.matched_material_id is not None:
+                        assigned_cluster_ids.append(i.matched_material_id)
+                    else:
+                        assigned_cluster_ids.append(i.id)
                 
-                ai_clusters = len(parents_with_children)
-                # Count total UNIQUE items and subtract those that are parents of clusters
-                total_unique_items = sum(1 for i in fresh_items if i.classification == Classification.UNIQUE)
-                ai_singletons = total_unique_items - ai_clusters
+                ai_counts = collections.Counter(assigned_cluster_ids)
+                ai_clusters = sum(1 for count in ai_counts.values() if count > 1)
+                ai_singletons = sum(1 for count in ai_counts.values() if count == 1)
                 
                 # 3. Calculate macro-accuracy
                 cluster_acc = min(actual_clusters, ai_clusters) / max(actual_clusters, ai_clusters) if max(actual_clusters, ai_clusters) > 0 else 1.0
